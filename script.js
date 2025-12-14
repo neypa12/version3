@@ -124,7 +124,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // REGISTRAR TRANSACCIÓN (FUERA DE LA TRANSACCIÓN DE LECTURA/ESCRITURA) - CORRECCIÓN CLAVE
             await db.collection("transactions").add({
                 ...transactionData,
-                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                timestamp: new Date()
             });
 
             console.log("Transacción completada con éxito.");
@@ -177,7 +177,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // REGISTRAR TRANSACCIÓN (FUERA DE LA TRANSACCIÓN DE LECTURA/ESCRITURA) - CORRECCIÓN CLAVE
             await db.collection("transactions").add({
                 ...transactionData,
-                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                timestamp: new Date()
             });
 
             alert(`¡Préstamo de $${amount.toLocaleString('es-ES')} aprobado! Tu nueva deuda es de $${debtAmount.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`);
@@ -239,7 +239,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // REGISTRAR TRANSACCIÓN (FUERA DE LA TRANSACCIÓN DE LECTURA/ESCRITURA) - CORRECCIÓN CLAVE
             await db.collection("transactions").add({
                 ...transactionData,
-                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                timestamp: new Date()
             });
 
             alert(`Pago de deuda por $${actualPaymentApplied.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} completado. Deuda restante: $${newDebt.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
