@@ -35,7 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // =========================================================
     // 3. CACHÉ DE ELEMENTOS DEL DOM
     // =========================================================
-    
+     
     // Elementos de la interfaz dinámica 
     const dynamicActionArea = document.getElementById('dynamic-action-area');
     const actionTitle = document.getElementById('action-title');
@@ -49,7 +49,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const pinInput = document.getElementById('pin-input');
     const submitPinButton = document.getElementById('submit-pin-button');
     const pinStatusMessage = document.getElementById('pin-status-message');
-    
+     
     // Botones globales
     const logoutButton = document.getElementById('logout-button');
     const resetButton = document.getElementById('reset-game-button');
@@ -70,25 +70,27 @@ document.addEventListener('DOMContentLoaded', () => {
         allPlayersCache = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         return allPlayersCache;
     }
-    
+     
     function generateTwoDigitPin() {
         return String(Math.floor(10 + Math.random() * 90)); // Genera un número entre 10 y 99
     }
-    
-    async function performTransaction(senderId, recipientId, amount) {
+     
+    // FUNCIÓN DE TRANSACCIÓN GENERAL (PAGAR A JUGADOR/BANCO) - CORREGIDA
+    async function performTransaction(senderId, recipientId, amount, type = 'TRANSFER', description = null) {
         if (amount <= 0) return alert("El monto debe ser positivo.");
 
         const senderRef = db.collection('players').doc(senderId);
         const recipientRef = db.collection('players').doc(recipientId);
 
         executeButton.disabled = true; 
+        let transactionData = {};
 
         try {
             await db.runTransaction(async (transaction) => {
-                
+                 
                 const senderDoc = await transaction.get(senderRef);
                 const recipientDoc = await transaction.get(recipientRef);
-                
+                 
                 // Si el remitente es un jugador, verificar saldo
                 if (senderId === CURRENT_PLAYER_ID) { 
                     if (senderDoc.data().balance < amount) {
@@ -96,7 +98,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
                 if (!recipientDoc.exists) {
-                     throw "El jugador que recibe no existe.";
+                    throw "El jugador que recibe no existe.";
                 }
 
                 // Actualizar saldo del remitente (solo si no es el banco)
@@ -106,65 +108,79 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 // Actualizar saldo del receptor
-                const newRecipientBalance = recipientDoc.data().balance + amount;
+                const newRecipientBalance = (recipientDoc.data().balance || 0) + amount;
                 transaction.update(recipientRef, { balance: newRecipientBalance });
                 
-                // Registrar Transacción
-                db.collection("transactions").add({
+                // Preparar los datos de la transacción
+                transactionData = {
                     sender: senderId,
                     recipient: recipientId,
                     amount: amount,
-                    type: 'TRANSFER',
-                    description: `${senderId} pagó a ${recipientId}`,
-                    timestamp: new date()
-                });
+                    type: type,
+                    description: description || `${senderId} pagó a ${recipientId}`
+                };
             });
+            
+            // REGISTRAR TRANSACCIÓN (FUERA DE LA TRANSACCIÓN DE LECTURA/ESCRITURA) - CORRECCIÓN CLAVE
+            await db.collection("transactions").add({
+                ...transactionData,
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            });
+
             console.log("Transacción completada con éxito.");
 
         } catch (e) {
             console.error("Fallo de Transacción:", e);
             if (e === "Saldo insuficiente.") {
-                 alert(e);
+                alert(e);
             } else {
-                 alert(`Error en la transacción: ${e.message || e}`);
+                alert(`Error en la transacción: ${e.message || e}`);
             }
-            
+             
         } finally {
             executeButton.disabled = false; 
         }
     }
-    
-    // NUEVA FUNCIÓN: Lógica para Pedir Préstamo
+     
+    // NUEVA FUNCIÓN: Lógica para Pedir Préstamo - CORREGIDA
     async function performLoanTransaction(playerId, amount) {
         if (amount <= 0) return alert("El monto debe ser positivo.");
 
         const playerRef = db.collection('players').doc(playerId);
         executeButton.disabled = true;
+        let debtAmount = 0;
+        let transactionData = {};
 
         try {
             await db.runTransaction(async (transaction) => {
                 const playerDoc = await transaction.get(playerRef);
                 const data = playerDoc.data();
-                
-                const debtAmount = amount * (1 + LOAN_INTEREST_RATE); // Monto + 10% de interés
-                
+                 
+                debtAmount = amount * (1 + LOAN_INTEREST_RATE); // Monto + 10% de interés
+                 
                 // Actualizar Saldo y Deuda (Asegurando inicialización a 0 si es null/undefined)
                 const newBalance = (data.balance || 0) + amount;
                 const newDebt = (data.deuda || 0) + debtAmount;
-                
+                 
                 transaction.update(playerRef, { balance: newBalance, deuda: newDebt });
-                
-                // Registrar Transacción
-                db.collection("transactions").add({
+                 
+                // Preparar los datos de la transacción
+                transactionData = {
                     sender: 'bank',
                     recipient: playerId,
                     amount: amount,
                     type: 'LOAN_REQUEST',
-                    description: `Préstamo: $${amount}. Deuda adquirida: $${debtAmount.toFixed(2)} (10% interés)`,
-                    timestamp: new Date ()
-                });
+                    description: `Préstamo: $${amount.toFixed(0)}. Deuda adquirida: $${debtAmount.toFixed(2)} (10% interés)`,
+                };
             });
-            alert(`¡Préstamo de $${amount.toLocaleString('es-ES')} aprobado! Tu nueva deuda es de $${(amount * (1 + LOAN_INTEREST_RATE)).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`);
+            
+            // REGISTRAR TRANSACCIÓN (FUERA DE LA TRANSACCIÓN DE LECTURA/ESCRITURA) - CORRECCIÓN CLAVE
+            await db.collection("transactions").add({
+                ...transactionData,
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            });
+
+            alert(`¡Préstamo de $${amount.toLocaleString('es-ES')} aprobado! Tu nueva deuda es de $${debtAmount.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`);
 
         } catch (e) {
             console.error("Fallo de Transacción de Préstamo:", e);
@@ -173,19 +189,23 @@ document.addEventListener('DOMContentLoaded', () => {
             executeButton.disabled = false;
         }
     }
-    
-    // NUEVA FUNCIÓN: Lógica para Pagar Deuda
+     
+    // NUEVA FUNCIÓN: Lógica para Pagar Deuda - CORREGIDA
     async function performDebtPayment(playerId, paymentAmount) {
         if (paymentAmount <= 0) return alert("El monto debe ser positivo.");
 
         const playerRef = db.collection('players').doc(playerId);
         executeButton.disabled = true;
+        let newDebt = 0;
+        let actualPaymentApplied = 0;
+        let transactionData = {};
+
 
         try {
             await db.runTransaction(async (transaction) => {
                 const playerDoc = await transaction.get(playerRef);
                 const data = playerDoc.data();
-                
+                 
                 const currentBalance = data.balance || 0;
                 const currentDebt = data.deuda || 0;
 
@@ -196,28 +216,34 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (currentBalance < paymentAmount) {
                     throw "Saldo insuficiente para cubrir el pago de la deuda.";
                 }
-                
+                 
                 // El pago se aplica hasta cubrir la deuda
-                const actualPaymentApplied = Math.min(paymentAmount, currentDebt);
-                
+                actualPaymentApplied = Math.min(paymentAmount, currentDebt);
+                 
                 // Actualizar Saldo y Deuda
                 const newBalance = currentBalance - actualPaymentApplied;
-                const newDebt = currentDebt - actualPaymentApplied; 
-                
+                newDebt = currentDebt - actualPaymentApplied; 
+                 
                 transaction.update(playerRef, { balance: newBalance, deuda: newDebt });
-                
-                // Registrar Transacción
-                db.collection("transactions").add({
+                 
+                // Preparar los datos de la transacción
+                transactionData = {
                     sender: playerId,
                     recipient: 'bank',
                     amount: actualPaymentApplied,
                     type: 'DEBT_PAYMENT',
                     description: `Pago de deuda por $${actualPaymentApplied.toFixed(2)}. Deuda restante: $${newDebt.toFixed(2)}`,
-                    timestamp: new date()
-                });
+                };
             });
-            alert(`Pago de deuda por $${paymentAmount.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} completado.`);
             
+            // REGISTRAR TRANSACCIÓN (FUERA DE LA TRANSACCIÓN DE LECTURA/ESCRITURA) - CORRECCIÓN CLAVE
+            await db.collection("transactions").add({
+                ...transactionData,
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            });
+
+            alert(`Pago de deuda por $${actualPaymentApplied.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} completado. Deuda restante: $${newDebt.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+             
         } catch (e) {
             console.error("Fallo de Pago de Deuda:", e);
             if (e === "Saldo insuficiente para cubrir el pago de la deuda." || e === "No tienes deudas pendientes.") {
@@ -235,19 +261,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!confirm("ADVERTENCIA: ¿Estás seguro de que quieres REINICIAR el juego? Se borrarán todas las transacciones, los saldos volverán a $1500, y se resetearán todos los PINs y DEUDAS.")) {
             return;
         }
-        
+         
         try {
             const playersSnapshot = await db.collection('players').get();
             const batch = db.batch();
-            
+             
             // 1. Resetear saldos, PINs y DEUDA
             playersSnapshot.forEach(doc => {
                 const playerRef = db.collection('players').doc(doc.id);
                 if (doc.id !== 'bank') {
-                    // **CAMBIO IMPORTANTE: RESETEAR LA DEUDA A 0**
+                    // **RESET DE SALDO, PIN y DEUDA**
                     batch.update(playerRef, { balance: INITIAL_BALANCE, pin: '00', deuda: 0 }); 
                 } else {
-                    batch.update(playerRef, { balance: 0 });
+                    batch.update(playerRef, { balance: 0 }); // El banco no necesita PIN ni deuda
                 }
             });
 
@@ -259,7 +285,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             await batch.commit();
             alert("¡Juego Reiniciado con éxito! Saldos a $1500, Deudas a $0. El PIN se generará en el próximo inicio de sesión.");
-            
+             
             CURRENT_PLAYER_ID = null;
             document.getElementById('main-app').style.display = 'none';
             document.getElementById('login-screen').style.display = 'block';
@@ -282,7 +308,7 @@ document.addEventListener('DOMContentLoaded', () => {
             let currentPlayerBalance = 0;
             let currentPlayerName = '';
             let currentPlayerDebt = 0;
-            
+             
             const currentPlayer = allPlayersCache.find(p => p.id === CURRENT_PLAYER_ID);
             if (currentPlayer) {
                 currentPlayerBalance = currentPlayer.balance;
@@ -302,7 +328,7 @@ document.addEventListener('DOMContentLoaded', () => {
         db.collection("transactions").orderBy("timestamp", "desc").onSnapshot((snapshot) => {
             const list = document.getElementById('transactions-list');
             list.innerHTML = ''; 
-            
+             
             // Creación del mapa ID -> Nombre
             const playerNames = allPlayersCache.reduce((acc, p) => {
                 acc[p.id] = p.name;
@@ -316,16 +342,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 let amountText = '';
                 let amountClass = '';
-                
+                 
                 // Conversión de ID a Nombre usando el mapa
                 const senderName = playerNames[data.sender] || (data.sender === 'bank' ? 'BANCO' : data.sender);
                 const recipientName = playerNames[data.recipient] || (data.recipient === 'bank' ? 'BANCO' : data.recipient);
-                
+                 
                 let description = `${senderName} pagó a ${recipientName}`;
-                
+                 
                 // Usar la descripción del préstamo/pago de deuda si existe
                 if (data.description) {
-                     description = data.description;
+                    description = data.description;
                 } else {
                     description = `${senderName} pagó a ${recipientName}`;
                 }
@@ -336,24 +362,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Lógica para el énfasis (color del monto y negrita de toda la fila)
                 if (data.sender === CURRENT_PLAYER_ID) {
                     // El jugador actual PAGÓ (Negativo - Rojo)
-                    amountText = `-$${data.amount.toLocaleString('es-ES')}`;
+                    amountText = `-$${data.amount.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
                     amountClass = 'negative';
                     isCurrentPlayerInvolved = true;
                 } else if (data.recipient === CURRENT_PLAYER_ID) {
                     // El jugador actual RECIBIÓ (Positivo - Verde)
-                    amountText = `+$${data.amount.toLocaleString('es-ES')}`;
+                    amountText = `+$${data.amount.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
                     amountClass = 'positive';
                     isCurrentPlayerInvolved = true;
                 } else {
                     // Transacción entre terceros (Normal)
-                    amountText = `$${data.amount.toLocaleString('es-ES')}`;
+                    amountText = `$${data.amount.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
                     amountClass = ''; 
                 }
-                
+                 
                 if (isCurrentPlayerInvolved) {
                     item.classList.add('highlight-transaction'); 
                 }
-                
+                 
                 const time = data.timestamp ? new Date(data.timestamp.toDate()).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit'}) : '...';
 
                 item.innerHTML = `
@@ -373,7 +399,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const targets = allPlayersCache.filter(p => 
             p.id !== CURRENT_PLAYER_ID && p.id !== 'bank' 
         );
-        
+         
         targets.forEach(p => {
             const button = document.createElement('button');
             button.classList.add('player-button', 'pay-select-button');
@@ -389,17 +415,30 @@ document.addEventListener('DOMContentLoaded', () => {
         bankButton.setAttribute('data-player-name', 'BANCO');
         bankButton.textContent = 'BANCO';
         payGrid.appendChild(bankButton);
-        
+         
         document.querySelectorAll('.pay-select-button').forEach(button => {
             button.addEventListener('click', paySelectHandler);
         });
     }
-    
+     
     function resetDynamicArea() {
         dynamicActionArea.style.display = 'none';
         amountInput.value = '';
+        amountInput.max = ''; // Resetear maximo
         statusMessage.textContent = '';
         currentAction = { type: null, targetId: null, targetName: null };
+    }
+    
+    // Handler para seleccionar a quién pagar
+    function paySelectHandler(e) {
+        resetDynamicArea();
+        const targetId = e.currentTarget.getAttribute('data-player-id');
+        const targetName = e.currentTarget.getAttribute('data-player-name');
+
+        dynamicActionArea.style.display = 'flex';
+        actionTitle.textContent = `PAGAR A: ${targetName}`;
+        amountInput.placeholder = "Monto a pagar";
+        currentAction = { type: 'TRANSFER', targetId: targetId, targetName: targetName };
     }
 
     // =========================================================
@@ -414,26 +453,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const players = await fetchAllPlayers(); 
             const player = players.find(p => p.id === playerId);
-            
+             
             document.querySelector('.login-grid').style.display = 'none';
             selectedPlayerForLogin = { id: playerId, name: playerName };
             pinEntryArea.style.display = 'flex'; 
             
+            pinInput.type = 'password'; // Asegurar que sea password por defecto
+            pinInput.value = '';
+            pinInput.disabled = false;
+            submitPinButton.style.display = 'inline-block';
+            
             // 1. GENERAR PIN SI NO EXISTE ('00' o null)
             if (!player || player.pin === '00' || !player.pin) {
-                
+                 
                 const newPin = generateTwoDigitPin();
                 // Actualizamos el PIN en Firebase
                 await db.collection('players').doc(playerId).update({ pin: newPin });
-                
+                 
                 pinTitle.textContent = `¡TU NUEVO PIN es ${newPin}! Memorízalo.`;
                 pinStatusMessage.innerHTML = `<span style="color: ${getComputedStyle(document.documentElement).getPropertyValue('--primary-color').trim()}; font-size: 1.1em;">Este es tu PIN de acceso: <b>${newPin}</b></span>`;
-                
+                 
                 pinInput.type = 'text'; 
                 pinInput.value = newPin; 
                 pinInput.disabled = true;
                 submitPinButton.style.display = 'none'; 
-                
+                 
                 // Forzar re-ingreso después de 3 segundos
                 setTimeout(() => {
                     pinTitle.textContent = `Ingresar PIN para ${playerName}`;
@@ -446,201 +490,152 @@ document.addEventListener('DOMContentLoaded', () => {
                 }, 3000); 
 
             } else {
-                // PIN EXISTENTE: Preparar para el ingreso normal
+                // PIN existe, pedir al usuario que lo ingrese
                 pinTitle.textContent = `Ingresar PIN para ${playerName}`;
-                pinStatusMessage.textContent = `Ingresa el PIN de 2 dígitos.`; 
-                pinInput.type = 'password';
-                pinInput.value = ''; 
-                pinInput.disabled = false;
-                submitPinButton.style.display = 'inline-block'; 
+                pinStatusMessage.textContent = `Ingresa el PIN de 2 dígitos.`;
                 pinInput.focus();
             }
-        }); 
-    }); 
+        });
+    });
 
-    // B. LOGIN: Enviar PIN 
+    // B. LOGIN: Verificación de PIN (Manejador del botón "Acceder")
     submitPinButton.addEventListener('click', async () => {
         const enteredPin = pinInput.value;
-        const playerId = selectedPlayerForLogin.id;
+        const player = allPlayersCache.find(p => p.id === selectedPlayerForLogin.id);
 
-        if (enteredPin.length !== 2) {
-            pinStatusMessage.textContent = "El PIN debe ser de 2 dígitos.";
+        if (!player) {
+            pinStatusMessage.textContent = 'Error: Jugador no encontrado.';
             return;
         }
 
-        const players = await fetchAllPlayers(); 
-        const player = players.find(p => p.id === playerId);
-        
-        if (player && player.pin === enteredPin) { 
-            
-            CURRENT_PLAYER_ID = playerId;
-            
+        if (enteredPin === player.pin) {
+            // Éxito en el Login
+            CURRENT_PLAYER_ID = player.id;
             document.getElementById('login-screen').style.display = 'none';
             document.getElementById('main-app').style.display = 'block';
-
-            startAppListeners(); 
-            updatePayButtons(); 
-            
-            pinEntryArea.style.display = 'none';
-            document.querySelector('.login-grid').style.display = 'grid';
+            resetDynamicArea();
+            updatePayButtons(); // Cargar botones de pago
+            startAppListeners(); // Iniciar la escucha de DB
 
         } else {
-            pinStatusMessage.textContent = "PIN incorrecto. Intenta de nuevo.";
+            // Fallo en el Login
+            pinStatusMessage.textContent = 'PIN incorrecto. Intenta de nuevo.';
             pinInput.value = '';
+            pinInput.focus();
         }
     });
-
-    // C. LOGIN: Volver a la selección de jugador
-    backButton.addEventListener('click', () => {
-        pinEntryArea.style.display = 'none';
-        document.querySelector('.login-grid').style.display = 'grid';
-        selectedPlayerForLogin = { id: null, name: null };
-        pinInput.value = '';
-        pinStatusMessage.textContent = '';
-        
-        // Resetear el input a su estado normal 
-        pinInput.type = 'password';
-        pinInput.disabled = false;
-        submitPinButton.style.display = 'inline-block'; 
-    });
-
-
-    // D. ACCIÓN: Seleccionar Pago
-    const paySelectHandler = (e) => {
-        if (!CURRENT_PLAYER_ID) return;
-        resetDynamicArea();
-        
-        const targetId = e.currentTarget.getAttribute('data-player-id');
-        const targetName = e.currentTarget.getAttribute('data-player-name');
-        
-        currentAction = {
-            type: 'PAY',
-            targetId: targetId,
-            targetName: targetName
-        };
-
-        actionTitle.textContent = `Pagar a: ${targetName}`;
-        dynamicActionArea.style.display = 'flex';
-        executeButton.textContent = 'PAGAR';
-        amountInput.placeholder = 'Monto a pagar';
-        amountInput.focus();
-    };
     
-    // E. ACCIÓN: Recibir del Banco (Monto variable)
-    bankReceiveButton.addEventListener('click', () => {
-        if (!CURRENT_PLAYER_ID) return;
-        resetDynamicArea();
-
-        currentAction = {
-            type: 'RECEIVE_FROM_BANK',
-            targetId: 'bank',
-            targetName: 'Banco'
-        };
-
-        actionTitle.textContent = `Recibir de: Banco`;
-        dynamicActionArea.style.display = 'flex';
-        executeButton.textContent = 'RECIBIR';
-        amountInput.placeholder = 'Monto a recibir';
-        amountInput.focus();
-    });
-
-    // F. ACCIÓN: Salario ($200 fijo)
-    salaryButton.addEventListener('click', () => {
-        if (!CURRENT_PLAYER_ID) return;
-        const amount = SALARY_AMOUNT;
-        
-        if (confirm(`¿Seguro que quieres cobrar el Salario ($${amount})?`)) {
-            performTransaction('bank', CURRENT_PLAYER_ID, amount);
-        }
-        resetDynamicArea(); 
-    });
-
-    // G. ACCIÓN: Seleccionar Pedir Préstamo (NUEVO)
-    requestLoanButton.addEventListener('click', () => {
-        if (!CURRENT_PLAYER_ID) return;
-        resetDynamicArea();
-        
-        currentAction = {
-            type: 'REQUEST_LOAN',
-            targetId: 'bank', 
-            targetName: 'Banco'
-        };
-
-        actionTitle.textContent = `Pedir Préstamo (Interés: 10%)`;
-        dynamicActionArea.style.display = 'flex';
-        executeButton.textContent = 'PEDIR PRÉSTAMO';
-        amountInput.placeholder = 'Monto a pedir';
-        amountInput.focus();
-    });
-
-    // H. ACCIÓN: Seleccionar Pagar Préstamo (Deuda) (NUEVO)
-    payLoanButton.addEventListener('click', () => {
-        if (!CURRENT_PLAYER_ID) return;
-        resetDynamicArea();
-
-        const currentPlayer = allPlayersCache.find(p => p.id === CURRENT_PLAYER_ID);
-        const currentDebt = currentPlayer ? (currentPlayer.deuda || 0) : 0;
-        
-        if (currentDebt <= 0) {
-            alert("No tienes deuda pendiente para pagar.");
-            return;
-        }
-        
-        currentAction = {
-            type: 'PAY_DEBT',
-            targetId: 'bank', 
-            targetName: 'Banco'
-        };
-
-        actionTitle.textContent = `Pagar Deuda Pendiente: $${currentDebt.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-        dynamicActionArea.style.display = 'flex';
-        executeButton.textContent = 'PAGAR DEUDA';
-        amountInput.placeholder = 'Monto a pagar de la deuda';
-        amountInput.value = currentDebt > 0 ? currentDebt.toFixed(2) : '';
-        amountInput.focus();
-    });
-
-    // I. ACCIÓN: Ejecutar Transacción (Pagar/Recibir/Préstamo/Pagar Deuda)
-    executeButton.addEventListener('click', () => {
-        if (!CURRENT_PLAYER_ID) return;
-
-        const amount = parseFloat(amountInput.value);
-        
-        statusMessage.textContent = ''; 
-
-        if (amount <= 0 || isNaN(amount)) {
-            statusMessage.textContent = "¡Ingresa un monto válido y mayor a 0!";
-            return;
-        }
-
-        if (currentAction.type === 'PAY') {
-            performTransaction(CURRENT_PLAYER_ID, currentAction.targetId, amount);
-        } else if (currentAction.type === 'RECEIVE_FROM_BANK') {
-            performTransaction('bank', CURRENT_PLAYER_ID, amount); 
-        } else if (currentAction.type === 'REQUEST_LOAN') { 
-            performLoanTransaction(CURRENT_PLAYER_ID, amount); 
-        } else if (currentAction.type === 'PAY_DEBT') { 
-            performDebtPayment(CURRENT_PLAYER_ID, amount);
-        }
-        
-        resetDynamicArea();
-    });
-
-    // J. UTILIDAD: Reiniciar Juego 
-    resetButton.addEventListener('click', () => {
-        resetGame();
-    });
-
-    // K. UTILIDAD: Cerrar Sesión (Ahora es el botón "INICIO")
+    // C. LOGOUT / VOLVER AL INICIO
     logoutButton.addEventListener('click', () => {
         CURRENT_PLAYER_ID = null;
         document.getElementById('main-app').style.display = 'none';
         document.getElementById('login-screen').style.display = 'block';
-        resetDynamicArea();
-        pinEntryArea.style.display = 'none';
-        document.querySelector('.login-grid').style.display = 'grid';
+        document.querySelector('.login-grid').style.display = 'grid'; // Mostrar botones de jugador
+        pinEntryArea.style.display = 'none'; // Ocultar PIN
     });
 
-    // L. INICIALIZACIÓN
-    fetchAllPlayers();
-});
+    // D. RESET GAME
+    resetButton.addEventListener('click', resetGame);
+    
+    // E. VOLVER a selección de jugador (desde pantalla PIN)
+    backButton.addEventListener('click', () => {
+        document.querySelector('.login-grid').style.display = 'grid'; // Mostrar botones de jugador
+        pinEntryArea.style.display = 'none'; // Ocultar PIN
+        pinStatusMessage.textContent = '';
+        pinInput.value = '';
+    });
+    
+    // F. MANEJADORES DE ACCIONES PRINCIPALES
+    
+    // F.1. RECIBIR SALARIO
+    salaryButton.addEventListener('click', async () => {
+        if (!CURRENT_PLAYER_ID) return;
+        resetDynamicArea();
+        
+        // El banco paga al jugador
+        await performTransaction('bank', CURRENT_PLAYER_ID, SALARY_AMOUNT, 'SALARY', `Salario de $${SALARY_AMOUNT} recibido`);
+    });
+    
+    // F.2. RECIBIR BANCO (Monto dinámico)
+    bankReceiveButton.addEventListener('click', () => {
+        resetDynamicArea();
+        dynamicActionArea.style.display = 'flex';
+        actionTitle.textContent = 'RECIBIR DINERO DEL BANCO';
+        amountInput.placeholder = "Monto a recibir";
+        currentAction = { type: 'RECEIVE_BANK', targetId: 'bank', targetName: 'BANCO' }; // targetId 'bank' solo para referencia, el sender es 'bank'
+    });
+    
+    // F.3. PEDIR PRÉSTAMO
+    requestLoanButton.addEventListener('click', () => {
+        resetDynamicArea();
+        dynamicActionArea.style.display = 'flex';
+        actionTitle.textContent = 'SOLICITAR PRÉSTAMO al BANCO';
+        statusMessage.textContent = 'Se añadirá 10% de interés a la deuda.';
+        amountInput.placeholder = "Monto del préstamo";
+        currentAction = { type: 'LOAN_REQUEST', targetId: 'bank', targetName: 'BANCO' };
+    });
+
+    // F.4. PAGAR DEUDA
+    payLoanButton.addEventListener('click', () => {
+        resetDynamicArea();
+        const currentPlayer = allPlayersCache.find(p => p.id === CURRENT_PLAYER_ID);
+        const currentDebt = currentPlayer.deuda || 0;
+        
+        if (currentDebt > 0) {
+            dynamicActionArea.style.display = 'flex';
+            actionTitle.textContent = `PAGAR DEUDA (Total: $${currentDebt.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`;
+            statusMessage.textContent = 'El pago se aplicará a tu deuda pendiente.';
+            amountInput.placeholder = `Monto a pagar (Máx: $${currentDebt.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`;
+            amountInput.max = currentDebt;
+            currentAction = { type: 'DEBT_PAYMENT', targetId: 'bank', targetName: 'BANCO' };
+        } else {
+             alert('No tienes deudas pendientes para pagar.');
+        }
+    });
+
+    // G. EJECUTAR ACCIÓN DINÁMICA (Botón 'Enviar' en la sección de Monto)
+    executeButton.addEventListener('click', async () => {
+        const amount = parseInt(amountInput.value);
+        if (isNaN(amount) || amount <= 0) {
+            statusMessage.textContent = "Ingresa un monto válido mayor a 0.";
+            return;
+        }
+
+        const senderId = CURRENT_PLAYER_ID;
+        let recipientId = currentAction.targetId;
+        
+        statusMessage.textContent = ''; // Limpiar mensaje
+
+        switch (currentAction.type) {
+            case 'TRANSFER':
+                // Pago a otro jugador o al banco
+                await performTransaction(senderId, recipientId, amount, 'TRANSFER', `${senderId} pagó a ${recipientId}`);
+                break;
+            case 'RECEIVE_BANK':
+                // Recibir dinero del banco (El sender es 'bank')
+                await performTransaction('bank', senderId, amount, 'RECEIVE_BANK', `Recibido del Banco`);
+                break;
+            case 'LOAN_REQUEST':
+                // Pedir préstamo
+                await performLoanTransaction(senderId, amount);
+                break;
+            case 'DEBT_PAYMENT':
+                // Pagar deuda
+                await performDebtPayment(senderId, amount);
+                break;
+            default:
+                statusMessage.textContent = "Acción no válida.";
+                return;
+        }
+
+        // Si la transacción fue exitosa, esconder la zona dinámica
+        if (!executeButton.disabled) { // Si el botón no está deshabilitado, la transacción terminó
+             resetDynamicArea();
+        }
+    });
+
+
+    // H. FUNCIÓN DE INICIO
+    fetchAllPlayers(); // Cargar los jugadores al iniciar
+
+}); // Fin de DOMContentLoaded
