@@ -213,7 +213,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     amount: actualPaymentApplied,
                     type: 'DEBT_PAYMENT',
                     description: `Pago de deuda por $${actualPaymentApplied.toFixed(2)}. Deuda restante: $${newDebt.toFixed(2)}`,
-                    timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                    timestamp: new date()
                 });
             });
             alert(`Pago de deuda por $${paymentAmount.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} completado.`);
