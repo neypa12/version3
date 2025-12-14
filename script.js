@@ -161,7 +161,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     amount: amount,
                     type: 'LOAN_REQUEST',
                     description: `Préstamo: $${amount}. Deuda adquirida: $${debtAmount.toFixed(2)} (10% interés)`,
-                    timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                    timestamp: new Date ().
                 });
             });
             alert(`¡Préstamo de $${amount.toLocaleString('es-ES')} aprobado! Tu nueva deuda es de $${(amount * (1 + LOAN_INTEREST_RATE)).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`);
